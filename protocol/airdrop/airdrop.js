@@ -4,7 +4,7 @@
  * PAXG airdrop runner — Ethereum mainnet
  * =====================================
  * Sends real PAX Gold to a fixed list of recipients, in small batches, on a
- * timer. Default plan: up to 1000 wallets, 10 per cycle, every 15 minutes.
+ * timer: 10 wallets per cycle, every 15 minutes, until everyone is paid.
  *
  * THIS MOVES REAL MONEY. The safety rules it follows:
  *
@@ -34,6 +34,7 @@
  */
 
 const { ethers } = require("ethers");
+const { buildRecipients } = require("./holders");
 const fs = require("fs");
 const path = require("path");
 
@@ -351,10 +352,34 @@ async function main() {
   const ctx = { token, decimals: Number(decimals), symbol };
   let cursor = 0;
 
+  // FULL AUTOMATION: if TOKEN_CA is set, rebuild the recipient list from chain
+  // at the start of each cycle so new holders are picked up with no manual step.
+  // New qualifying wallets are appended (never reordered — that would misalign
+  // the paid cursor); already-paid wallets are skipped by state.json as always.
+  const refreshHolders = async () => {
+    if (!process.env.TOKEN_CA) return;
+    try {
+      const { recipients: fresh } = await buildRecipients();
+      const known = new Set(remaining.map(a => a.toLowerCase()));
+      let added = 0;
+      for (const a of fresh) {
+        const norm = ethers.getAddress(a);
+        if (!known.has(norm.toLowerCase()) && !state.paid[norm]) { remaining.push(norm); known.add(norm.toLowerCase()); added++; }
+      }
+      if (added) info("holder refresh: new qualifying wallets added", { added, total: remaining.length });
+    } catch (e) {
+      warn("holder refresh failed — continuing with the current list", { err: e.message });
+    }
+  };
+
   const runBatch = async () => {
+    await refreshHolders();
     const batch = remaining.slice(cursor, cursor + CFG.perBatch);
     if (batch.length === 0) {
-      info("airdrop complete — all recipients paid", { total: recipients.length });
+      // Everyone known is paid. If auto-refresh is on, stay alive to catch new
+      // holders next cycle; otherwise the run is genuinely done.
+      if (process.env.TOKEN_CA && !CFG.once) { info("all current recipients paid — watching for new holders"); return; }
+      info("airdrop complete — all recipients paid", { total: remaining.length });
       process.exit(0);
     }
 
@@ -390,8 +415,8 @@ async function main() {
     cursor += batch.length;
     info("batch done", { paidSoFar: Object.keys(state.paid).length, remaining: remaining.length - cursor });
 
-    if (cursor >= remaining.length) {
-      info("airdrop complete — all recipients paid", { total: recipients.length });
+    if (cursor >= remaining.length && !(process.env.TOKEN_CA && !CFG.once)) {
+      info("airdrop complete — all recipients paid", { total: remaining.length });
       process.exit(0);
     }
   };

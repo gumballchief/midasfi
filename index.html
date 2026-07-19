@@ -11,6 +11,7 @@
 <meta property="og:title" content="MidasFi — a gold distribution protocol on Robinhood Chain">
 <meta property="og:description" content="A 1% share of every trade, collected in WETH, spent on tokenized gold, and distributed to holders every 15 minutes.">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@TheMidasFi">
 <meta name="twitter:title" content="MidasFi — a gold distribution protocol on Robinhood Chain">
 <meta name="twitter:description" content="A 1% share of every trade, collected in WETH, spent on tokenized gold, and distributed to holders every 15 minutes.">
 <!-- Vercel Analytics. The @vercel/analytics npm package is a React/Next
@@ -108,6 +109,8 @@ h3{font-size:19px;letter-spacing:-.024em;line-height:1.25}
 }
 .nav-links a:hover{color:var(--text);background:rgba(20,17,12,.05)}
 .nav-right{margin-left:auto;display:flex;align-items:center;gap:12px}
+.nav-x{display:grid;place-items:center;width:38px;height:38px;border-radius:9px;color:var(--muted);transition:color .2s var(--ease),background .2s var(--ease)}
+.nav-x:hover{color:var(--text);background:rgba(20,17,12,.05)}
 .pill{
   display:inline-flex;align-items:center;gap:9px;height:38px;padding:0 14px;
   border:1px solid var(--line);border-radius:9px;background:var(--surface);
@@ -382,7 +385,7 @@ html.js .chart.drawn .ar{opacity:1}
 
 /* ── footer ─────────────────────────────────────────── */
 footer{border-top:1px solid var(--line);padding-block:56px 40px;margin-top:clamp(64px,7vw,110px)}
-.f-grid{display:grid;grid-template-columns:1.5fr repeat(2,auto);gap:36px 56px;margin-bottom:46px}
+.f-grid{display:grid;grid-template-columns:1.5fr repeat(3,auto);gap:36px 56px;margin-bottom:46px}
 .f-grid > div:first-child p{margin-top:16px;color:var(--muted);font-size:13.5px;max-width:32ch;line-height:1.55}
 .fc b{display:block;margin-bottom:15px}
 .fc a{display:block;font-size:14px;color:var(--muted);padding:5px 0;transition:color .2s var(--ease)}
@@ -456,6 +459,7 @@ html.js .rv.in .step:nth-child(4){animation-delay:.24s}
     </div>
     <div class="nav-right">
       <span class="pill"><span class="dot"></span><span class="tag">Interval</span><span class="v" id="clock">15:00</span></span>
+      <a href="https://x.com/TheMidasFi" target="_blank" rel="noopener" class="nav-x" aria-label="MidasFi on X"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.9 1.15h3.68l-8.04 9.19L24 22.85h-7.4l-5.8-7.58-6.63 7.58H.16l8.6-9.83L0 1.15h7.6l5.24 6.93 6.06-6.93Zm-1.29 19.5h2.04L6.48 3.24H4.3l13.31 17.41Z"/></svg></a>
       <a href="#buy" class="btn btn-gold">Buy MidasFi</a>
       <button class="nav-burger" id="burger" aria-label="Menu" aria-expanded="false" aria-controls="navmenu">
         <svg width="16" height="11" viewBox="0 0 16 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M1 1h14M1 10h14"/></svg>
@@ -767,6 +771,10 @@ html.js .rv.in .step:nth-child(4){animation-delay:.24s}
         <a href="#asset">The asset</a>
         <a href="#where">Where your gold arrives</a>
         <a href="#faq">FAQ</a>
+      </div>
+      <div class="fc">
+        <b class="tag">Community</b>
+        <a href="https://x.com/TheMidasFi" target="_blank" rel="noopener">X / Twitter</a>
       </div>
     </div>
 

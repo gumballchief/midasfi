@@ -54,8 +54,8 @@ holders never claim anything but no single transaction runs out of gas.
 `claim()` stays open as a permissionless fallback.
 
 Measured on 400 holders: **~62k gas each, so roughly 480 holders per 30M block.**
-1,000 holders is ~2 blocks per cycle; 10,000 is ~21 transactions every 15
-minutes; beyond that the threshold has to rise or payouts move to claim-only.
+Every holder is included with no artificial cap; the batch size and interval
+decide throughput, not a wallet limit.
 Raising the qualifying balance is the cheapest lever on that cost — it is
 currently **50,000 MidasFi**.
 
