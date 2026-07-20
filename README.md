@@ -8,7 +8,7 @@
 
 <img src="assets/readme/wave.svg" width="100%" alt=""/>
 
-[![Site](https://img.shields.io/badge/live-midasfi.net-C89A5C?style=for-the-badge)](https://midasfi.net)
+[![Site](https://img.shields.io/badge/live-gldfi.net-C89A5C?style=for-the-badge)](https://gldfi.net)
 [![Tests](https://img.shields.io/badge/tests-25%20passing-1E7A46?style=for-the-badge)]()
 [![Chain](https://img.shields.io/badge/launch-Bags%20·%20Robinhood%20Chain-14110C?style=for-the-badge)]()
 [![Status](https://img.shields.io/badge/status-pre--launch-E5B23E?style=for-the-badge)]()
@@ -35,7 +35,7 @@ flowchart LR
 
 | Piece | Where | What it is |
 |---|---|---|
-| 🌐 Landing site | `index.html` | Live at [midasfi.net](https://midasfi.net) — static, zero build step |
+| 🌐 Landing site | `index.html` | Live at [gldfi.net](https://gldfi.net) — static, zero build step |
 | 📡 Read API | `api/` | Dependency-free chain reader; refuses to show fake numbers |
 | 📜 Contracts | `protocol/contracts/` | `GoldDistributor` + `GoldTreasury`, Solidity 0.8.26 |
 | 🤖 Keeper | `protocol/keeper/` | Runs the cycle: sync holders → claim WETH → buy gold → pay |
