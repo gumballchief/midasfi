@@ -1,171 +1,128 @@
 /**
- * Minimal, dependency-free chain reader.
+ * Live-data reader for the Gold site — dependency-free (Vercel static + serverless).
  *
- * Deliberately no ethers import: the site deploys to Vercel as pure static
- * files with no build step, and adding a node_modules tree just to read four
- * integers would change that. Node 18+ has global fetch, and every call here is
- * a no-argument view function, so the ABI encoding is a hardcoded 4-byte
- * selector and the decoding is one BigInt.
+ * The launch runs the airdrop model: Gold trades on Robinhood Chain, and gold
+ * (PAXG) is sent to holders from a dedicated wallet on Ethereum. So "real data"
+ * comes from two public places, read here with no API key:
  *
- * Selectors were generated with ethers `id(sig).slice(0,10)` — see the note in
- * protocol/README.md if a signature ever changes.
+ *   - HOLDERS: the Gold token's holder count on Robinhood Chain (Blockscout).
+ *   - DISTRIBUTED: every PAXG transfer OUT of the airdrop wallet on Ethereum
+ *     (Blockscout) — summed for the total, newest timestamp for the countdown.
+ *
+ * All three addresses are public; they are constants, not secrets.
  */
 
-const SEL = {
-  totalDistributed: "0xefca2eed",
-  totalPaidOut: "0x1357e1dc",
-  cycles: "0x6dbe5554",
-  eligibleCount: "0x630cb4dc",
-  eligibleSupply: "0x6ade07b0",
-  carry: "0xf02ec765",
-  threshold: "0x42cde4e8",
-  // GoldTreasury (Bags/WETH model). The old totalEthReceived/Converted
-  // selectors died with the native-ETH treasury — querying them would revert
-  // and silently pin the site to its pre-launch state.
-  totalWethClaimed: "0xd6a61f65",
-  totalWethConverted: "0xa5a3dcbc",
-};
+const TOKEN_CA = "0x59e026843639c75c95334ad87e8b5df5d03629a0";        // Gold, Robinhood Chain
+const AIRDROP_WALLET = "0x3F70109fc5a1B44F03e953760FC97f803929331F"; // sends PAXG, Ethereum
+const PAXG = "0x45804880De22913dAFE09f4980848ECE6EcbAf78";           // PAX Gold, Ethereum
 
-// event Distributed(uint256 indexed cycle, uint256 amount, uint256 eligibleSupply, uint256 carried)
-const TOPIC_DISTRIBUTED =
-  "0xf7576d8c2653e9d07af5ef229acf59b339e327d4e0eaddb4a96615534cf148f8";
+const RH = "https://robinhoodchain.blockscout.com/api/v2";
+const ETH = "https://eth.blockscout.com/api/v2";
+const INTERVAL_MS = 15 * 60 * 1000;
 
-const RPC_URL = process.env.RPC_URL || "";
-const DISTRIBUTOR = process.env.DISTRIBUTOR_ADDRESS || "";
-const TREASURY = process.env.TREASURY_ADDRESS || "";
-
-/** Is the protocol actually deployed and readable? */
-function isConfigured() {
-  return Boolean(RPC_URL && DISTRIBUTOR);
-}
-
-async function rpc(method, params, { timeoutMs = 4000 } = {}) {
+async function getJSON(url, timeoutMs = 6000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(RPC_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-      signal: ctrl.signal,
-    });
-    if (!res.ok) throw new Error(`rpc ${res.status}`);
-    const json = await res.json();
-    if (json.error) throw new Error(json.error.message || "rpc error");
-    return json.result;
+    const res = await fetch(url, { headers: { accept: "application/json" }, signal: ctrl.signal });
+    if (!res.ok) throw new Error(`${res.status} ${url}`);
+    return await res.json();
   } finally {
     clearTimeout(t);
   }
 }
 
-/** Call a no-argument view function and return the raw uint256 as a BigInt. */
-async function readUint(to, selector) {
-  const hex = await rpc("eth_call", [{ to, data: selector }, "latest"]);
-  if (!hex || hex === "0x") return 0n;
-  return BigInt(hex);
-}
-
-/** 18-decimal fixed point -> a plain JS number, for display only. */
-function toUnits(wei, decimals = 18) {
-  const d = 10n ** BigInt(decimals);
-  const whole = wei / d;
-  const frac = wei % d;
-  return Number(whole) + Number(frac) / Number(d);
-}
-
-/**
- * Everything the site needs, in one shot.
- *
- * Returns `deployed:false` when the protocol is not configured or unreachable.
- * That flag is load-bearing: the front end must keep showing its clearly
- * labelled illustrative content in that case rather than rendering zeros as if
- * they were real measurements.
- */
-async function getStats() {
-  if (!isConfigured()) {
-    return { deployed: false, reason: "not_configured" };
+/** Every PAXG transfer OUT of the airdrop wallet, newest first, bounded. */
+async function paxgOut(maxPages = 6) {
+  const base = `${ETH}/addresses/${AIRDROP_WALLET}/token-transfers?type=ERC-20&filter=from`;
+  let url = base;
+  const out = [];
+  for (let p = 0; p < maxPages; p++) {
+    const d = await getJSON(url).catch(() => null);
+    if (!d) break;
+    for (const i of d.items || []) {
+      const tk = i.token || {};
+      const addr = (tk.address || tk.address_hash || "").toLowerCase();
+      const from = ((i.from || {}).hash || "").toLowerCase();
+      if (addr === PAXG.toLowerCase() && from === AIRDROP_WALLET.toLowerCase()) {
+        out.push({
+          to: (i.to || {}).hash,
+          value: BigInt((i.total || {}).value || "0"),
+          ts: i.timestamp,
+          tx: i.transaction_hash || i.tx_hash,
+        });
+      }
+    }
+    if (!d.next_page_params) break;
+    url = `${base}&${new URLSearchParams(d.next_page_params)}`;
   }
+  return out;
+}
 
+function toUnits(wei) {
+  const d = 10n ** 18n;
+  return Number(wei / d) + Number(wei % d) / Number(d);
+}
+
+async function getStats() {
   try {
-    const [
-      totalDistributed, totalPaidOut, cycles,
-      eligibleCount, eligibleSupply, carry, threshold,
-    ] = await Promise.all([
-      readUint(DISTRIBUTOR, SEL.totalDistributed),
-      readUint(DISTRIBUTOR, SEL.totalPaidOut),
-      readUint(DISTRIBUTOR, SEL.cycles),
-      readUint(DISTRIBUTOR, SEL.eligibleCount),
-      readUint(DISTRIBUTOR, SEL.eligibleSupply),
-      readUint(DISTRIBUTOR, SEL.carry),
-      readUint(DISTRIBUTOR, SEL.threshold),
+    const [tok, sends] = await Promise.all([
+      getJSON(`${RH}/tokens/${TOKEN_CA}`).catch(() => null),
+      paxgOut().catch(() => []),
     ]);
 
-    let wethClaimed = 0n, wethConverted = 0n;
-    if (TREASURY) {
-      [wethClaimed, wethConverted] = await Promise.all([
-        readUint(TREASURY, SEL.totalWethClaimed),
-        readUint(TREASURY, SEL.totalWethConverted),
-      ]);
+    const holders = tok && (tok.holders || tok.holders_count)
+      ? Number(tok.holders || tok.holders_count) : null;
+
+    let total = 0n, lastTs = null;
+    const recipients = new Set();
+    for (const s of sends) {
+      total += s.value;
+      recipients.add((s.to || "").toLowerCase());
+      if (!lastTs || new Date(s.ts) > new Date(lastTs)) lastTs = s.ts;
     }
 
-    // A protocol that has never run is deployed but has nothing to report.
-    // Say so explicitly rather than shipping a wall of zeros.
-    const hasRun = cycles > 0n;
+    // Persistent countdown anchor: last distribution + 15 min, rolled forward to
+    // the next future slot. Derived from chain, so it never resets on reload.
+    let nextDistributionMs = null, lastDistributionMs = null;
+    if (lastTs) {
+      lastDistributionMs = new Date(lastTs).getTime();
+      let n = lastDistributionMs + INTERVAL_MS;
+      const now = Date.now();
+      while (n <= now) n += INTERVAL_MS;
+      nextDistributionMs = n;
+    }
 
     return {
-      deployed: true,
-      hasRun,
-      goldDistributed: toUnits(totalDistributed),
-      goldPaidOut: toUnits(totalPaidOut),
-      cycles: Number(cycles),
-      holders: Number(eligibleCount),
-      eligibleSupply: toUnits(eligibleSupply),
-      carryWei: carry.toString(),
-      threshold: toUnits(threshold),
-      wethClaimed: toUnits(wethClaimed),
-      wethConverted: toUnits(wethConverted),
+      live: true,
+      started: sends.length > 0,
+      holders,
+      goldDistributed: toUnits(total),
+      distributions: sends.length,
+      recipientsPaid: recipients.size,
+      lastDistributionMs,
+      nextDistributionMs,
+      intervalMs: INTERVAL_MS,
       readAt: new Date().toISOString(),
     };
   } catch (e) {
-    return { deployed: false, reason: "unreachable", error: String(e.message || e) };
+    return { live: false, reason: "unreachable", error: String(e.message || e) };
   }
 }
 
-/** The most recent distribution events, newest first. */
-async function getDistributions(limit = 10) {
-  if (!isConfigured()) return { deployed: false, reason: "not_configured", distributions: [] };
-
+async function getDistributions(limit = 8) {
   try {
-    const headHex = await rpc("eth_blockNumber", []);
-    const head = BigInt(headHex);
-    // Public RPCs commonly cap getLogs ranges; 50k blocks is a safe window.
-    const from = head > 50_000n ? head - 50_000n : 0n;
-
-    const logs = await rpc("eth_getLogs", [{
-      address: DISTRIBUTOR,
-      topics: [TOPIC_DISTRIBUTED],
-      fromBlock: "0x" + from.toString(16),
-      toBlock: "latest",
-    }], { timeoutMs: 8000 });
-
-    const rows = (logs || []).map((l) => {
-      // data = amount, eligibleSupply, carried (each 32 bytes); cycle is indexed
-      const d = l.data.slice(2);
-      const word = (i) => BigInt("0x" + d.slice(i * 64, (i + 1) * 64));
-      return {
-        cycle: Number(BigInt(l.topics[1])),
-        gold: toUnits(word(0)),
-        eligibleSupply: toUnits(word(1)),
-        block: Number(BigInt(l.blockNumber)),
-        tx: l.transactionHash,
-      };
-    });
-
-    rows.sort((a, b) => b.block - a.block);
-    return { deployed: true, distributions: rows.slice(0, limit) };
+    const sends = await paxgOut(3);
+    sends.sort((a, b) => new Date(b.ts) - new Date(a.ts));
+    return {
+      live: true,
+      distributions: sends.slice(0, limit).map((s) => ({
+        to: s.to, gold: toUnits(s.value), ts: s.ts, tx: s.tx,
+      })),
+    };
   } catch (e) {
-    return { deployed: false, reason: "unreachable", error: String(e.message || e), distributions: [] };
+    return { live: false, reason: "unreachable", error: String(e.message || e), distributions: [] };
   }
 }
 
-module.exports = { getStats, getDistributions, isConfigured };
+module.exports = { getStats, getDistributions };

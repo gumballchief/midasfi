@@ -906,23 +906,9 @@ html.js .rv.in .step:nth-child(4){animation-delay:.24s}
     if (c2) c2.textContent = txt;
 
     if (left <= 0){
-      if (rowsEl){
-        // PAXG is one troy ounce, so a cycle moves a fraction of a token, not
-        // several. Sized against the spot price below so the amount and the
-        // dollar figure beside it stay consistent.
-        var PAXG_USD = 4008.73;
-        var amt = (0.21 + Math.sin(seq) * 0.12).toFixed(4);
-        var wallets = (1184 + (seq % 24)).toLocaleString();
-        var prev = rowsEl.firstElementChild;
-        if (prev) prev.classList.remove('fresh');   // only the newest row highlights
-        rowsEl.insertAdjacentHTML('afterbegin', rowHTML(
-          [stampOf(new Date(due)), amt, '$' + Math.round(amt * PAXG_USD).toLocaleString(), wallets],
-          !reduce
-        ));
-        while (rowsEl.children.length > 6) rowsEl.removeChild(rowsEl.lastElementChild);
-      }
-      seq++;
-      due = Date.now() + INTERVAL * 1000;   // reset from now: one row on return, not twelve
+      // Roll to the next slot; the live-data poll below re-anchors this to
+      // the real last-distribution time from chain, so it never drifts.
+      due += INTERVAL * 1000;
     }
   }
   tick();
@@ -1000,68 +986,64 @@ html.js .rv.in .step:nth-child(4){animation-delay:.24s}
      malformed response — leaves the honest placeholder copy untouched.
      Zeros from an unconfigured contract must never render as measurements. */
   (function liveData(){
-    fetch('/api/stats', { headers: { accept: 'application/json' } })
-      .then(function(r){ return r.ok ? r.json() : null; })
-      .then(function(s){
-        if (!s || s.deployed !== true || s.hasRun !== true) return;   // stay pre-launch
-        if (typeof s.cycles !== 'number' || s.cycles < 1) return;
-        if (typeof s.holders !== 'number' || typeof s.goldDistributed !== 'number') return;
+    function pad2(v){ return (v < 10 ? '0' : '') + v; }
 
-        var badge = document.querySelector('.badge');
-        if (badge) badge.innerHTML = '<span class="dot"></span> Live on Robinhood Chain';
+    function fetchFeed(){
+      fetch('/api/distributions?limit=6', { headers: { accept: 'application/json' } })
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(d){
+          if (!d || d.live !== true || !Array.isArray(d.distributions) || !d.distributions.length || !rowsEl) return;
+          var heads = document.querySelectorAll('.fhead .tag');
+          var cols = ['Time', 'Gold sent', 'Recipient', ''];
+          for (var i = 0; i < heads.length && i < cols.length; i++) heads[i].textContent = cols[i];
+          var feedSec = document.getElementById('feed');
+          var h2 = feedSec && feedSec.querySelector('.head h2');
+          var p2 = feedSec && feedSec.querySelector('.head .sub');
+          if (h2) h2.textContent = 'Every payout, on-chain.';
+          if (p2) p2.textContent = 'Each row is a real PAXG transfer to a holder, on Ethereum.';
+          rowsEl.innerHTML = d.distributions.map(function(x){
+            var w = new Date(x.ts);
+            var t = pad2(w.getUTCHours()) + ':' + pad2(w.getUTCMinutes()) + ' UTC';
+            var to = x.to || '';
+            var short = to ? (to.slice(0, 6) + '…' + to.slice(-4)) : '';
+            return '<div class="frow" role="row">'
+              + '<span class="f-t" role="cell">' + t + '</span>'
+              + '<span class="f-amt" role="cell" aria-label="Gold sent"><b>' + Number(x.gold).toFixed(4) + '</b><span>PAXG</span></span>'
+              + '<span class="f-v" role="cell" aria-label="Recipient">' + short + '</span>'
+              + '<span class="f-w" role="cell"></span>'
+              + '</div>';
+          }).join('');
+        }).catch(function(){});
+    }
 
-        var note = document.querySelector('.stats-note');
-        if (note){
-          note.textContent = s.goldDistributed.toLocaleString(undefined, { maximumFractionDigits: 2 })
-            + ' PAXG distributed to ' + s.holders.toLocaleString()
-            + ' holders across ' + s.cycles.toLocaleString() + ' cycles.';
-        }
+    function poll(){
+      fetch('/api/stats', { headers: { accept: 'application/json' } })
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(s){
+          if (!s || s.live !== true) return;
+          // Persistent countdown: anchor to the real next-distribution time read
+          // from chain, so it stays correct across reloads instead of restarting.
+          if (typeof s.nextDistributionMs === 'number') due = s.nextDistributionMs;
 
-        var feedTitle = document.querySelector('.feed-top b');
-        if (feedTitle) feedTitle.textContent = 'Live distributions';
-        var feedTag = document.querySelector('.feed-top .tag');
-        if (feedTag) feedTag.textContent = 'Live from Robinhood Chain';
+          var note = document.querySelector('.stats-note');
+          if (s.started && typeof s.goldDistributed === 'number') {
+            if (note) note.textContent = s.goldDistributed.toLocaleString(undefined, { maximumFractionDigits: 4 })
+              + ' PAXG sent to ' + (s.recipientsPaid || 0).toLocaleString()
+              + (typeof s.holders === 'number' ? ' of ' + s.holders.toLocaleString() + ' holders.' : ' holders.');
+            var ft = document.querySelector('.feed-top b'); if (ft) ft.textContent = 'Live distributions';
+            var fg = document.querySelector('.feed-top .tag'); if (fg) fg.textContent = 'Live · Ethereum';
+            fetchFeed();
+          } else if (typeof s.holders === 'number' && note) {
+            note.textContent = s.holders.toLocaleString() + ' holders on Robinhood Chain. Distributions begin soon.';
+          }
+        }).catch(function(){});
+    }
 
-        return fetch('/api/distributions?limit=6', { headers: { accept: 'application/json' } })
-          .then(function(r){ return r.ok ? r.json() : null; })
-          .then(function(d){
-            if (!d || d.deployed !== true || !Array.isArray(d.distributions) || !d.distributions.length) return;
-            if (!rowsEl) return;
-
-            // The Distributed event carries (cycle, amount, eligibleSupply) and
-            // NO wallet count and NO dollar cost. Relabel the columns to what
-            // the chain actually reports rather than leaving the placeholder
-            // headers and filling them with the nearest-looking number.
-            var heads = document.querySelectorAll('.fhead .tag');
-            var live = ['Cycle', 'Gold distributed', 'Eligible supply', ''];
-            for (var i = 0; i < heads.length && i < live.length; i++) heads[i].textContent = live[i];
-
-            // The section copy promises cost and wallet counts, which the chain
-            // does not report. Bring the heading in line with the real columns
-            // rather than leaving a caption that contradicts the table under it.
-            var feedSec = document.getElementById('feed');
-            var h2 = feedSec && feedSec.querySelector('.head h2');
-            var p2 = feedSec && feedSec.querySelector('.head .sub');
-            if (h2) h2.textContent = 'Every payout, on-chain.';
-            if (p2) p2.textContent = 'Each row is one distribution: the cycle, the gold bought, and the supply it was shared across.';
-
-            rowsEl.innerHTML = d.distributions.map(function(x){
-              return '<div class="frow" role="row">'
-                + '<span class="f-t" role="cell">cycle ' + x.cycle + '</span>'
-                + '<span class="f-amt" role="cell" aria-label="Gold distributed"><b>'
-                +   Number(x.gold).toFixed(4) + '</b><span>PAXG</span></span>'
-                + '<span class="f-v" role="cell" aria-label="Eligible supply">'
-                +   Number(x.eligibleSupply).toLocaleString(undefined, { maximumFractionDigits: 0 })
-                + '</span>'
-                + '<span class="f-w" role="cell"></span>'
-                + '</div>';
-            }).join('');
-          });
-      })
-      .catch(function(){ /* stay pre-launch — silence is the safe outcome */ });
+    poll();
+    setInterval(poll, 60000);
   })();
 
-  /* an open panel's pixel height goes stale on rotate or a late font load */
+    /* an open panel's pixel height goes stale on rotate or a late font load */
   var lastW = window.innerWidth, resizeT;
   function syncOpenFaq(){
     var open = document.querySelector('.q.open .a');
