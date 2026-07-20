@@ -279,83 +279,16 @@ async function main() {
   const state = loadState();
   const remaining = recipients.filter((r) => !state.paid[r]);
 
-  // ---- decide the per-wallet amount -------------------------------------
-  //
-  // In split mode this is locked into state.json on the first run and reused
-  // for every later batch. Recomputing it each cycle would pay earlier wallets
-  // a different amount from later ones as the balance drains or tops up, which
-  // is not something you could defend to the people who got less.
-  let amount;
-  if (state.amountPerWallet) {
-    amount = BigInt(state.amountPerWallet);
-    info("using the amount locked in on the first run", {
-      perWallet: `${ethers.formatUnits(amount, decimals)} ${symbol}`,
-    });
-  } else if (CFG.amountMode === "fixed") {
-    amount = ethers.parseUnits(CFG.amountPerWallet, Number(decimals));
-  } else {
-    if (!signer) {
-      info("split mode needs a wallet to read a balance from — supply AIRDROP_PRIVATE_KEY even for a dry run");
-      return;
-    }
-    let pot = await token.balanceOf(signer.address);
-    if (CFG.budget) {
-      const cap = ethers.parseUnits(CFG.budget, Number(decimals));
-      if (cap < pot) pot = cap;
-    }
-    if (pot === 0n) {
-      info("nothing to distribute yet — the wallet holds no " + symbol + ". Fees have not arrived.");
-      return;
-    }
-    amount = pot / BigInt(recipients.length);   // equal share, remainder stays put
-    if (amount === 0n) {
-      info("balance too small to split across this many recipients", {
-        holds: `${ethers.formatUnits(pot, decimals)} ${symbol}`, recipients: recipients.length,
-      });
-      return;
-    }
-    if (CFG.live) { state.amountPerWallet = amount.toString(); saveState(state); }
-    info("split across every recipient", {
-      pot: `${ethers.formatUnits(pot, decimals)} ${symbol}`,
-      recipients: recipients.length,
-      perWallet: `${ethers.formatUnits(amount, decimals)} ${symbol}`,
-    });
-  }
-
   info("airdrop ready", {
-    mode: CFG.live ? "LIVE — will send real funds" : "DRY RUN — nothing will be sent",
+    mode: CFG.live ? "LIVE - will send real funds" : "DRY RUN - nothing will be sent",
     chainId: Number(net.chainId),
-    token: CFG.token,
-    tokenName: `${name} (${symbol})`,
-    amountPerWallet: `${ethers.formatUnits(amount, decimals)} ${symbol}`,
-    amountMode: CFG.amountMode,
-    recipients: recipients.length,
+    tokenName: name + " (" + symbol + ")",
+    holders: recipients.length,
     alreadyPaid: recipients.length - remaining.length,
-    remaining: remaining.length,
     perBatch: CFG.perBatch,
     intervalMinutes: CFG.intervalMs / 60000,
-    estimatedCycles: Math.ceil(remaining.length / CFG.perBatch),
-    estimatedMinutes: Math.ceil(remaining.length / CFG.perBatch) * (CFG.intervalMs / 60000),
+    note: "each cycle splits the wallet's whole balance among that cycle's batch",
   });
-
-  // Can we actually afford the whole run?
-  const needed = amount * BigInt(remaining.length);
-  if (signer) {
-    const held = await token.balanceOf(signer.address);
-    info("funding check", {
-      sender: signer.address,
-      holds: `${ethers.formatUnits(held, decimals)} ${symbol}`,
-      needsForRun: `${ethers.formatUnits(needed, decimals)} ${symbol}`,
-      sufficient: held >= needed,
-    });
-    if (held < needed) {
-      throw new Error(`sender holds ${ethers.formatUnits(held, decimals)} ${symbol} but the run needs ${ethers.formatUnits(needed, decimals)}`);
-    }
-  } else {
-    info("funding check skipped — no key supplied (dry run)", {
-      wouldNeed: `${ethers.formatUnits(needed, decimals)} ${symbol}`,
-    });
-  }
 
   const ctx = { token, decimals: Number(decimals), symbol };
   let cursor = 0;
@@ -429,28 +362,29 @@ async function main() {
     const gas = await gasOk(provider);
     if (!gas.ok) return; // try again next cycle, cursor untouched
 
-    info("batch start", { batch: batch.length, gwei: gas.gwei.toFixed(3), from: cursor, of: remaining.length });
+    // Split the wallet's CURRENT balance across just this cycle's batch, so each
+    // funding round goes entirely to the holders paid in that round.
+    let amount = 0n;
+    if (signer) {
+      let bal = await token.balanceOf(signer.address);
+      if (CFG.budget) { const cap = ethers.parseUnits(CFG.budget, Number(decimals)); if (cap < bal) bal = cap; }
+      if (bal === 0n) { info("wallet is empty - waiting for a top-up", { holders: remaining.length }); return; }
+      amount = bal / BigInt(batch.length);
+      if (amount === 0n) { info("balance too small to split across this batch", { holds: ethers.formatUnits(bal, decimals) + " " + symbol, batch: batch.length }); return; }
+    }
+
+    info("batch start", { batch: batch.length, perWallet: signer ? (ethers.formatUnits(amount, decimals) + " " + symbol) : "(dry, no wallet)", gwei: gas.gwei.toFixed(3), from: cursor, of: remaining.length });
 
     for (const to of batch) {
-      if (state.paid[to]) { info("already paid — skipping", { to }); continue; }
-
-      if (!CFG.live) {
-        info("dry run: would send", { to, amount: `${ethers.formatUnits(amount, decimals)} ${symbol}` });
-        continue;
-      }
-
+      if (state.paid[to]) { info("already paid - skipping", { to }); continue; }
+      if (!CFG.live) { info("dry run: would send", { to, amount: signer ? (ethers.formatUnits(amount, decimals) + " " + symbol) : "(need wallet)" }); continue; }
       try {
         const rec = await payOne(ctx, to, amount);
-        // Persist immediately: the next send must never be able to repeat this one.
-        state.paid[to] = rec;
+        state.paid[to] = rec;               // persist BEFORE the next send
         saveState(state);
-        info("paid", {
-          to, delivered: `${ethers.formatUnits(rec.delivered, decimals)} ${symbol}`, tx: rec.tx,
-        });
+        info("paid", { to, delivered: ethers.formatUnits(rec.delivered, decimals) + " " + symbol, tx: rec.tx });
       } catch (e) {
-        // Stop the batch rather than plough on — an unrecorded send is the one
-        // failure mode that could double-pay on the next run.
-        error("send failed — halting this batch", { to, err: e.shortMessage || e.message });
+        error("send failed - halting this batch", { to, err: e.shortMessage || e.message });
         return;
       }
     }
