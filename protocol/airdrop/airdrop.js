@@ -4,7 +4,7 @@
  * PAXG airdrop runner — Ethereum mainnet
  * =====================================
  * Sends real PAX Gold to a fixed list of recipients, in small batches, on a
- * timer: 10 wallets per cycle, every 15 minutes, until everyone is paid.
+ * timer: 10 wallets per cycle, every 10 minutes, until everyone is paid.
  *
  * THIS MOVES REAL MONEY. The safety rules it follows:
  *
@@ -62,7 +62,7 @@ const CFG = {
   // Optional ceiling in "split" mode: spend at most this much of the balance.
   budget: process.env.BUDGET || null,
   perBatch: Number(process.env.PER_BATCH || 10),
-  intervalMs: Number(process.env.INTERVAL_MS || 15 * 60 * 1000),
+  intervalMs: Number(process.env.INTERVAL_MS || 10 * 60 * 1000),
 
   maxGasGwei: Number(process.env.MAX_GAS_GWEI || 15),
   txTimeoutMs: Number(process.env.TX_TIMEOUT_MS || 300_000),
